@@ -63,13 +63,14 @@ convertNotice PQ.Notify{..}
                    , notificationChannel = notifyRelname
                    , notificationData    = notifyExtra   }
 
--- | Returns a single notification.   If no notifications are available,
---   'getNotification' blocks until one arrives.
+-- | Returns a single notification.  If no notifications are
+-- available, 'getNotification' blocks until one arrives.
 --
---   It is safe to call 'getNotification' on a connection that is concurrently
---   being used for other purposes,   note however that PostgreSQL does not
---   deliver notifications while a connection is inside a transaction.
-
+-- This uses 'withLibPQConnection' under the hood and thereby also
+-- needs exclusive access to the connection while it is waiting. All
+-- other access to the connection will block until the call
+-- returns. Note that PostgreSQL does not deliver notifications while
+-- a connection is inside a transaction.
 getNotification :: Connection -> IO (Either IOError Notification)
 getNotification conn = join $ withLibPQConnection conn fetch
   where
@@ -89,6 +90,7 @@ getNotification conn = join $ withLibPQConnection conn fetch
                 -- with async exceptions, whereas threadDelay can.
                 Just _fd -> do
                   return (threadDelay 1000000 >> loop)
+#else
                 -- This case fixes the race condition above.   By registering
                 -- our interest in the descriptor before we drop the lock,
                 -- there is no opportunity for the descriptor index to be
@@ -125,7 +127,6 @@ getNotification conn = join $ withLibPQConnection conn fetch
 
 -- | Non-blocking variant of 'getNotification'.   Returns a single notification,
 -- if available.   If no notifications are available,  returns 'Nothing'.
-
 getNotificationNonBlocking :: Connection -> IO (Maybe Notification)
 getNotificationNonBlocking conn =
     withLibPQConnection conn $ \c -> do
@@ -144,6 +145,5 @@ getNotificationNonBlocking conn =
 -- to NOTIFY messages (which include the PID of the notifying backend
 -- process). Note that the PID belongs to a process executing on the
 -- database server host, not the local host!
-
 getBackendPID :: Connection -> IO CPid
 getBackendPID conn = withLibPQConnection conn PQ.backendPID
