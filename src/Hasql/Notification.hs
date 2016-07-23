@@ -35,7 +35,7 @@ module Hasql.Notification
      , getBackendPID
      ) where
 
-import           Control.Exception (throwIO, try)
+import           Control.Exception (try)
 import           Control.Monad (join,void)
 import qualified Data.ByteString as B
 import qualified Database.PostgreSQL.LibPQ as PQ
@@ -49,17 +49,21 @@ import           GHC.Conc (atomically)
 import           Control.Concurrent (threadWaitReadSTM)
 #endif
 
+-- | A single notification returned by PostgreSQL
+--
+-- This is kept separate from 'PQ.Notify' to keep control over the
+-- API.
 data Notification = Notification
-   { notificationPid     :: !CPid
-   , notificationChannel :: !B.ByteString
-   , notificationData    :: !B.ByteString
+   { notificationPid     :: !CPid -- ^ PID of notifying server process
+   , notificationChannel :: !B.ByteString -- ^ notification channel name
+   , notificationData    :: !B.ByteString -- ^ notification payload string
    }
 
 convertNotice :: PQ.Notify -> Notification
-convertNotice not
-    = Notification { notificationPid     = PQ.notifyBePid not
-                   , notificationChannel = PQ.notifyRelname not
-                   , notificationData    = PQ.notifyExtra not }
+convertNotice notification
+    = Notification { notificationPid     = PQ.notifyBePid notification
+                   , notificationChannel = PQ.notifyRelname notification
+                   , notificationData    = PQ.notifyExtra notification }
 
 -- | Returns a single notification.  If no notifications are
 -- available, 'getNotification' blocks until one arrives.
@@ -72,8 +76,9 @@ convertNotice not
 getNotification :: Connection -> IO (Either IOError Notification)
 getNotification conn = join $ withLibPQConnection conn fetch
   where
+    funcName :: String
     funcName = "Hasql.Notification.getNotification"
-
+    fetch :: PQ.Connection -> IO (IO (Either IOError Notification))
     fetch c = do
         PQ.notifies c >>= \case
           Just msg -> return (return $! (Right $! convertNotice msg))
@@ -123,8 +128,10 @@ getNotification conn = join $ withLibPQConnection conn fetch
                      ioe_filename    = Nothing
                    }
 
--- | Non-blocking variant of 'getNotification'.   Returns a single notification,
--- if available.   If no notifications are available,  returns 'Nothing'.
+-- | Non-blocking variant of 'getNotification'.
+--
+-- Returns a single notification, if available. If no notifications are
+-- available, returns 'Nothing'.
 getNotificationNonBlocking :: Connection -> IO (Maybe Notification)
 getNotificationNonBlocking conn =
     withLibPQConnection conn $ \c -> do

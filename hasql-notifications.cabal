@@ -21,6 +21,7 @@ library
                      , bytestring >= 0.10 && < 0.11
                      , hasql >= 0.19.14 && < 0.20
                      , postgresql-libpq >= 0.9 && < 0.10
+  ghc-options:         -Wall
   default-language:    Haskell2010
 
 source-repository head
