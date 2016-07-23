@@ -2,6 +2,6 @@
 
 [![Travis](https://img.shields.io/travis/cocreature/hasql-notifications.svg?maxAge=2592000)]()
 
-The initial code for this is extracted from a
+The initial code for this was extracted from a
 [PR to hasql](https://github.com/nikita-volkov/hasql/pull/43) by Leon
 P. Smith.
