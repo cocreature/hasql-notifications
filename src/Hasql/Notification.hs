@@ -1,6 +1,4 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 
 -----------------------------------------------------------------------------
@@ -58,10 +56,10 @@ data Notification = Notification
    }
 
 convertNotice :: PQ.Notify -> Notification
-convertNotice PQ.Notify{..}
-    = Notification { notificationPid     = notifyBePid
-                   , notificationChannel = notifyRelname
-                   , notificationData    = notifyExtra   }
+convertNotice not
+    = Notification { notificationPid     = PQ.notifyBePid not
+                   , notificationChannel = PQ.notifyRelname not
+                   , notificationData    = PQ.notifyExtra not }
 
 -- | Returns a single notification.  If no notifications are
 -- available, 'getNotification' blocks until one arrives.
