@@ -86,61 +86,61 @@ getNotification = getNotification' withLibPQConnection
 -- deliver notifications while a connection is inside a transaction.
 getNotification' :: (forall a. c -> (PQ.Connection -> IO a) -> IO a) -> c -> IO (Either IOError Notification)
 getNotification' withConnection conn = join $ withConnection conn fetch
-  where
-    funcName :: String
-    funcName = "Hasql.Notification.getNotification"
-    fetch :: PQ.Connection -> IO (IO (Either IOError Notification))
-    fetch c = do
-        PQ.notifies c >>= \case
-          Just msg -> return (return $! (Right $! convertNotice msg))
-          Nothing -> do
-              PQ.socket c >>= \case
-                Nothing  -> return (return (Left fdError))
+  where funcName :: String
+        funcName = "Hasql.Notification.getNotification"
+        fetch
+          :: PQ.Connection -> IO (IO (Either IOError Notification))
+        fetch c =
+          do PQ.notifies c >>=
+               \case
+                 Just msg -> return (return $! (Right $! convertNotice msg))
+                 Nothing ->
+                   do PQ.socket c >>=
+                        \case
+                          Nothing -> return (return (Left fdError))
 #if defined(mingw32_HOST_OS)
-                -- threadWaitRead doesn't work for sockets on Windows, so just
-                -- poll for input every second (PQconsumeInput is non-blocking).
-                --
-                -- We could call select(), but FFI calls can't be interrupted
-                -- with async exceptions, whereas threadDelay can.
-                Just _fd -> do
-                  return (threadDelay 1000000 >> loop)
+                          -- threadWaitRead doesn't work for sockets on Windows, so just
+                          -- poll for input every second (PQconsumeInput is non-blocking).
+                          --
+                          -- We could call select(), but FFI calls can't be interrupted
+                          -- with async exceptions, whereas threadDelay can.
+                          Just _fd -> return (threadDelay 1000000 >> loop)
 #else
-                -- This case fixes the race condition above.   By registering
-                -- our interest in the descriptor before we drop the lock,
-                -- there is no opportunity for the descriptor index to be
-                -- reallocated on us.
-                --
-                -- (That is, assuming there isn't concurrently executing
-                -- code that manipulates the descriptor without holding
-                -- the lock... but such a major bug is likely to exhibit
-                -- itself in an at least somewhat more dramatic fashion.)
-                Just fd  -> do
-                  (waitRead, _) <- threadWaitReadSTM fd
-                  return $ try (atomically waitRead) >>= \case
-                              Left  err -> return (Left (setLoc err))
-                              Right _   -> loop
-
+                          -- This case fixes the race condition above.   By registering
+                          -- our interest in the descriptor before we drop the lock,
+                          -- there is no opportunity for the descriptor index to be
+                          -- reallocated on us.
+                          --
+                          -- (That is, assuming there isn't concurrently executing
+                          -- code that manipulates the descriptor without holding
+                          -- the lock... but such a major bug is likely to exhibit
+                          -- itself in an at least somewhat more dramatic fashion.)
+                          Just fd ->
+                            do (waitRead,_) <- threadWaitReadSTM fd
+                               return $
+                                 try (atomically waitRead) >>=
+                                 \case
+                                   Left err -> return (Left (setLoc err))
+                                   Right _ -> loop
 #endif
-    loop :: IO (Either IOError Notification)
-    loop =
-      join $
-      withConnection conn $
-      \c ->
-        do void $ PQ.consumeInput c
-           fetch c
-
-    setLoc :: IOError -> IOError
-    setLoc err = err {ioe_location = funcName}
-
-    fdError :: IOError
-    fdError =
-      IOError {ioe_handle = Nothing
-              ,ioe_type = ResourceVanished
-              ,ioe_location = funcName
-              ,ioe_description =
-                 "failed to fetch file descriptor (did the connection time out?)"
-              ,ioe_errno = Nothing
-              ,ioe_filename = Nothing}
+        loop :: IO (Either IOError Notification)
+        loop =
+          join $
+          withConnection conn $
+          \c ->
+            do void $ PQ.consumeInput c
+               fetch c
+        setLoc :: IOError -> IOError
+        setLoc err = err {ioe_location = funcName}
+        fdError :: IOError
+        fdError =
+          IOError {ioe_handle = Nothing
+                  ,ioe_type = ResourceVanished
+                  ,ioe_location = funcName
+                  ,ioe_description =
+                     "failed to fetch file descriptor (did the connection time out?)"
+                  ,ioe_errno = Nothing
+                  ,ioe_filename = Nothing}
 
 -- | Non-blocking variant of 'getNotification'.
 --
