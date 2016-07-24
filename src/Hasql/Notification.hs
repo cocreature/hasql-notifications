@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -31,7 +32,9 @@
 module Hasql.Notification
      ( Notification(..)
      , getNotification
+     , getNotification'
      , getNotificationNonBlocking
+     , getNotificationNonBlocking'
      , getBackendPID
      ) where
 
@@ -53,28 +56,36 @@ import           Control.Concurrent (threadWaitReadSTM)
 --
 -- This is kept separate from 'PQ.Notify' to keep control over the
 -- API.
-data Notification = Notification
-   { notificationPid     :: !CPid -- ^ PID of notifying server process
-   , notificationChannel :: !B.ByteString -- ^ notification channel name
-   , notificationData    :: !B.ByteString -- ^ notification payload string
-   }
+data Notification =
+  Notification {notificationPid :: !CPid -- ^ PID of notifying server process
+               ,notificationChannel :: !B.ByteString -- ^ notification channel name
+               ,notificationData :: !B.ByteString -- ^ notification payload string
+               }
 
 convertNotice :: PQ.Notify -> Notification
-convertNotice notification
-    = Notification { notificationPid     = PQ.notifyBePid notification
-                   , notificationChannel = PQ.notifyRelname notification
-                   , notificationData    = PQ.notifyExtra notification }
+convertNotice notification =
+  Notification {notificationPid = PQ.notifyBePid notification
+               ,notificationChannel = PQ.notifyRelname notification
+               ,notificationData = PQ.notifyExtra notification}
+
+-- | Returns a single notification. If no notifications are available,
+-- 'getNotification' blocks until one arrives.
+--
+-- The connection is not blocked while waiting for notifications. Note
+-- that PostgreSQL does not deliver notifications while a connection
+-- is inside a transaction.
+getNotification :: Connection -> IO (Either IOError Notification)
+getNotification = getNotification' withLibPQConnection
 
 -- | Returns a single notification.  If no notifications are
 -- available, 'getNotification' blocks until one arrives.
 --
--- This uses 'withLibPQConnection' under the hood and thereby also
--- needs exclusive access to the connection while it is waiting. All
--- other access to the connection will block until the call
--- returns. Note that PostgreSQL does not deliver notifications while
--- a connection is inside a transaction.
-getNotification :: Connection -> IO (Either IOError Notification)
-getNotification conn = join $ withLibPQConnection conn fetch
+-- The function is used to gain access to the raw @libpq@
+-- 'PQ.Connection'. It is only used for nonblocking reads so the
+-- connection should not be blocked. Note that PostgreSQL does not
+-- deliver notifications while a connection is inside a transaction.
+getNotification' :: (forall a. c -> (PQ.Connection -> IO a) -> IO a) -> c -> IO (Either IOError Notification)
+getNotification' withConnection conn = join $ withConnection conn fetch
   where
     funcName :: String
     funcName = "Hasql.Notification.getNotification"
@@ -110,38 +121,52 @@ getNotification conn = join $ withLibPQConnection conn fetch
                               Right _   -> loop
 
 #endif
-
-    loop = join $ withLibPQConnection conn $ \c -> do
-             void $ PQ.consumeInput c
-             fetch c
+    loop :: IO (Either IOError Notification)
+    loop =
+      join $
+      withConnection conn $
+      \c ->
+        do void $ PQ.consumeInput c
+           fetch c
 
     setLoc :: IOError -> IOError
-    setLoc err = err { ioe_location = funcName }
+    setLoc err = err {ioe_location = funcName}
 
     fdError :: IOError
-    fdError = IOError {
-                     ioe_handle      = Nothing,
-                     ioe_type        = ResourceVanished,
-                     ioe_location    = funcName,
-                     ioe_description = "failed to fetch file descriptor (did the connection time out?)",
-                     ioe_errno       = Nothing,
-                     ioe_filename    = Nothing
-                   }
+    fdError =
+      IOError {ioe_handle = Nothing
+              ,ioe_type = ResourceVanished
+              ,ioe_location = funcName
+              ,ioe_description =
+                 "failed to fetch file descriptor (did the connection time out?)"
+              ,ioe_errno = Nothing
+              ,ioe_filename = Nothing}
 
 -- | Non-blocking variant of 'getNotification'.
 --
--- Returns a single notification, if available. If no notifications are
--- available, returns 'Nothing'.
+-- Returns a single notification, if available. If no notifications
+-- are available, returns 'Nothing'.
 getNotificationNonBlocking :: Connection -> IO (Maybe Notification)
-getNotificationNonBlocking conn =
-    withLibPQConnection conn $ \c -> do
-        PQ.notifies c >>= \case
-          Just msg -> return $! Just $! convertNotice msg
-          Nothing -> do
-              void $ PQ.consumeInput c
-              PQ.notifies c >>= \case
-                Just msg -> return $! Just $! convertNotice msg
-                Nothing  -> return Nothing
+getNotificationNonBlocking = getNotificationNonBlocking' withLibPQConnection
+
+-- | Non-blocking variant of 'getNotification''.
+--
+-- Returns a single notification, if available. If no notifications
+-- are available, returns 'Nothing'. The function is used to gain
+-- access to the raw @libpq@ 'PQ.Connection'.
+getNotificationNonBlocking' :: (forall a. c -> (PQ.Connection -> IO a) -> IO a) -> c -> IO (Maybe Notification)
+getNotificationNonBlocking' withConnection conn =
+  withConnection conn $
+  \c ->
+    do PQ.notifies c >>=
+         \case
+           Just msg -> return $! Just $! convertNotice msg
+           Nothing ->
+             do void $ PQ.consumeInput c
+                PQ.notifies c >>=
+                  \case
+                    Just msg -> return $! Just $! convertNotice msg
+                    Nothing -> return Nothing
 
 -- | Returns the process 'CPid' of the backend server process
 -- handling this connection.
