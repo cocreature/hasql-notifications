@@ -61,6 +61,7 @@ data Notification =
                ,notificationChannel :: !B.ByteString -- ^ notification channel name
                ,notificationData :: !B.ByteString -- ^ notification payload string
                }
+  deriving (Show,Eq,Ord)
 
 convertNotice :: PQ.Notify -> Notification
 convertNotice notification =
