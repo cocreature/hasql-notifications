@@ -8,9 +8,9 @@
 -- Copyright   :  (c) 2016 Moritz Kiefer
 --                (c) 2011-2015 Leon P Smith
 --                (c) 2012 Joey Adams
--- License     :  MIT
+-- License     :  BSD3
 --
--- Maintainer  :  Nikita Volkov <nikita.y.volkov@mail.ru>
+-- Maintainer  :  Moritz Kiefer <moritz.kiefer@purelyfunctional.org>
 --
 -- Support for receiving asynchronous notifications via PostgreSQL's
 -- Listen/Notify mechanism.  See
@@ -39,17 +39,18 @@ module Hasql.Notification
      ) where
 
 import           Control.Exception (try)
-import           Control.Monad (join,void)
+import           Control.Monad (void)
+import           Control.Monad.Except
 import qualified Data.ByteString as B
 import qualified Database.PostgreSQL.LibPQ as PQ
 import           GHC.IO.Exception (IOException(..),IOErrorType(ResourceVanished))
 import           Hasql.Connection
-import           System.Posix.Types (CPid)
+import           System.Posix.Types (CPid,Fd)
 #if defined(mingw32_HOST_OS)
 import           Control.Concurrent (threadDelay)
 #else
 import           GHC.Conc (atomically)
-import           Control.Concurrent (threadWaitReadSTM)
+import           Control.Concurrent (threadWaitRead,threadDelay,forkIO)
 #endif
 
 -- | A single notification returned by PostgreSQL
@@ -86,51 +87,45 @@ getNotification = getNotification' withLibPQConnection
 -- connection should not be blocked. Note that PostgreSQL does not
 -- deliver notifications while a connection is inside a transaction.
 getNotification' :: (forall a. c -> (PQ.Connection -> IO a) -> IO a) -> c -> IO (Either IOError Notification)
-getNotification' withConnection conn = join $ withConnection conn fetch
+getNotification' withConnection conn = loop
   where funcName :: String
         funcName = "Hasql.Notification.getNotification"
-        fetch
-          :: PQ.Connection -> IO (IO (Either IOError Notification))
-        fetch c =
-          do PQ.notifies c >>=
-               \case
-                 Just msg -> return (return $! (Right $! convertNotice msg))
-                 Nothing ->
-                   do PQ.socket c >>=
-                        \case
-                          Nothing -> return (return (Left fdError))
-#if defined(mingw32_HOST_OS)
-                          -- threadWaitRead doesn't work for sockets on Windows, so just
-                          -- poll for input every second (PQconsumeInput is non-blocking).
-                          --
-                          -- We could call select(), but FFI calls can't be interrupted
-                          -- with async exceptions, whereas threadDelay can.
-                          Just _fd -> return (threadDelay 1000000 >> loop)
-#else
-                          -- This case fixes the race condition above.   By registering
-                          -- our interest in the descriptor before we drop the lock,
-                          -- there is no opportunity for the descriptor index to be
-                          -- reallocated on us.
-                          --
-                          -- (That is, assuming there isn't concurrently executing
-                          -- code that manipulates the descriptor without holding
-                          -- the lock... but such a major bug is likely to exhibit
-                          -- itself in an at least somewhat more dramatic fashion.)
-                          Just fd ->
-                            do (waitRead,_) <- threadWaitReadSTM fd
-                               return $
-                                 try (atomically waitRead) >>=
-                                 \case
-                                   Left err -> return (Left (setLoc err))
-                                   Right _ -> loop
-#endif
         loop :: IO (Either IOError Notification)
         loop =
-          join $
-          withConnection conn $
-          \c ->
-            do void $ PQ.consumeInput c
-               fetch c
+          do notification <- withConnection conn (\c -> PQ.consumeInput c >> PQ.notifies c)
+             case notification of
+               Just msg -> pure $! (Right $! convertNotice msg)
+               Nothing ->
+
+#if defined(mingw32_HOST_OS)
+                 -- threadWaitRead doesn't work for sockets on Windows, so just
+                 -- poll for input every second (PQconsumeInput is non-blocking).
+                 --
+                 -- We could call select(), but FFI calls can't be interrupted
+                 -- with async exceptions, whereas threadDelay can.
+                 threadDelay 1000000 >> loop
+#else
+                 -- This case fixes the race condition above.   By registering
+                 -- our interest in the descriptor before we drop the lock,
+                 -- there is no opportunity for the descriptor index to be
+                 -- reallocated on us.
+                 --
+                 -- (That is, assuming there isn't concurrently executing
+                 -- code that manipulates the descriptor without holding
+                 -- the lock... but such a major bug is likely to exhibit
+                 -- itself in an at least somewhat more dramatic fashion.)
+                 do -- TODO this suffers from a race condition the input could have changed between looking for
+                    sock <- withConnection conn PQ.socket
+                    case sock of
+                      Nothing -> pure (Left fdError)
+                      Just fd -> do
+                        -- (waitRead,_) <- threadWaitReadSTM fd
+                        forkIO (withConnection conn PQ.flush >> threadDelay 1000)
+                        try (threadWaitRead fd) >>=
+                          \case
+                             Left err -> return (Left (setLoc err))
+                             Right _ -> putStrLn "looping" >> loop
+#endif
         setLoc :: IOError -> IOError
         setLoc err = err {ioe_location = funcName}
         fdError :: IOError

@@ -48,6 +48,7 @@ extra-deps:
 - binary-parser-0.5.2
 - tuple-th-0.2.5
 - success-0.2.6
+- postgres-tmp-0.1.0.1
 
 # Override default flag values for local packages and extra-deps
 flags: {}
