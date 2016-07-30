@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PartialTypeSignatures #-}
 module Hasql.NotificationSpec
   ( spec
   ) where
@@ -93,9 +92,6 @@ test lock f c = do putStrLn "filling lock"
 -- send using this function rather than simply combining sendQuery w
 -- ith getResult like hasql does. Otherwise random race conditions
 -- occur in which threadWaitRead deadlocks.
-exec :: PQ.Connection
-     -> _
-     -> IO PQ.Result
 exec h sql =
   do success <- PQ.sendQuery h sql
      if success
