@@ -3,6 +3,7 @@ module Hasql.NotificationSpec
   ( spec
   ) where
 
+import           Control.Applicative (pure)
 import           Control.Concurrent
 import           Control.Exception
 import           Data.Either
