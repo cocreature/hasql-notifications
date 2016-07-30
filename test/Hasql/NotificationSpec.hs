@@ -120,8 +120,13 @@ exec h sql =
                           Just res ->
                             do status <- PQ.resultStatus res
                                case status of
-                                 PQ.CopyOut -> return res
-                                 PQ.CopyIn -> return res
-                                 _ -> error (show status)
+                                 PQ.EmptyQuery    -> getResult h mres'
+                                 PQ.CommandOk     -> getResult h mres'
+                                 PQ.TuplesOk      -> getResult h mres'
+                                 PQ.CopyOut       -> return res
+                                 PQ.CopyIn        -> return res
+                                 PQ.BadResponse   -> getResult h mres'
+                                 PQ.NonfatalError -> getResult h mres'
+                                 PQ.FatalError    -> getResult h mres'
 
 -- exec h sql = PQ.sendQuery h sql >> PQ.getResult h
