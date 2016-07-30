@@ -38,6 +38,7 @@ module Hasql.Notification
      , getBackendPID
      ) where
 
+import           Control.Applicative (pure)
 import           Control.Exception (try)
 import           Control.Monad (void)
 import           Control.Monad.Except
