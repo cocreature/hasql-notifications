@@ -51,7 +51,7 @@ import           System.Posix.Types (CPid,Fd)
 import           Control.Concurrent (threadDelay)
 #else
 import           GHC.Conc (atomically)
-import           Control.Concurrent (threadWaitRead,threadDelay,forkIO)
+import           Control.Concurrent (threadWaitReadSTM,threadDelay,forkIO)
 #endif
 
 -- | A single notification returned by PostgreSQL
@@ -88,56 +88,72 @@ getNotification = getNotification' withLibPQConnection
 -- connection should not be blocked. Note that PostgreSQL does not
 -- deliver notifications while a connection is inside a transaction.
 getNotification' :: (forall a. c -> (PQ.Connection -> IO a) -> IO a) -> c -> IO (Either IOError Notification)
-getNotification' withConnection conn = loop
-  where funcName :: String
-        funcName = "Hasql.Notification.getNotification"
-        loop :: IO (Either IOError Notification)
-        loop =
-          do notification <- withConnection conn (\c -> PQ.consumeInput c >> PQ.notifies c)
-             case notification of
-               Just msg -> pure $! (Right $! convertNotice msg)
-               Nothing ->
-
+getNotification' withConnection conn = join $ withConnection conn fetch
+  where
+    funcName = "Hasql.Notification.getNotification"
+    fetch :: PQ.Connection -> IO (IO (Either IOError Notification))
+    fetch c = do
+        mmsg <- PQ.notifies c
+        case mmsg of
+          Just msg -> return (return $! Right $! convertNotice msg)
+          Nothing -> do
+              mfd <- PQ.socket c
+              case mfd of
+                Nothing  -> return (return (Left fdError))
 #if defined(mingw32_HOST_OS)
-                 -- threadWaitRead doesn't work for sockets on Windows, so just
-                 -- poll for input every second (PQconsumeInput is non-blocking).
-                 --
-                 -- We could call select(), but FFI calls can't be interrupted
-                 -- with async exceptions, whereas threadDelay can.
-                 threadDelay 1000000 >> loop
+                -- threadWaitRead doesn't work for sockets on Windows, so just
+                -- poll for input every second (PQconsumeInput is non-blocking).
+                --
+                -- We could call select(), but FFI calls can't be interrupted
+                -- with async exceptions, whereas threadDelay can.
+                Just _fd -> do
+                  return (threadDelay 1000000 >> loop)
 #else
-                 -- This case fixes the race condition above.   By registering
-                 -- our interest in the descriptor before we drop the lock,
-                 -- there is no opportunity for the descriptor index to be
-                 -- reallocated on us.
-                 --
-                 -- (That is, assuming there isn't concurrently executing
-                 -- code that manipulates the descriptor without holding
-                 -- the lock... but such a major bug is likely to exhibit
-                 -- itself in an at least somewhat more dramatic fashion.)
-                 do -- TODO this suffers from a race condition the input could have changed between looking for
-                    sock <- withConnection conn PQ.socket
-                    case sock of
-                      Nothing -> pure (Left fdError)
-                      Just fd -> do
-                        -- (waitRead,_) <- threadWaitReadSTM fd
-                        forkIO (withConnection conn PQ.flush >> threadDelay 1000)
-                        try (threadWaitRead fd) >>=
-                          \case
-                             Left err -> return (Left (setLoc err))
-                             Right _ -> putStrLn "looping" >> loop
+                -- Technically there's a race condition that is usually benign.
+                -- If the connection is closed or reset after we drop the
+                -- lock,  and then the fd index is reallocated to a new
+                -- descriptor before we call threadWaitRead,  then
+                -- we could end up waiting on the wrong descriptor.
+                --
+                -- Now, if the descriptor becomes readable promptly,  then
+                -- it's no big deal as we'll wake up and notice the change
+                -- on the next iteration of the loop.   But if are very
+                -- unlucky,  then we could end up waiting a long time.
+                --
+                -- By registering
+                -- our interest in the descriptor before we drop the lock,
+                -- there is no opportunity for the descriptor index to be
+                -- reallocated on us.
+                --
+                -- (That is, assuming there isn't concurrently executing
+                -- code that manipulates the descriptor without holding
+                -- the lock... but such a major bug is likely to exhibit
+                -- itself in an at least somewhat more dramatic fashion.)
+                Just fd  -> do
+                  (waitRead, _) <- threadWaitReadSTM fd
+                  return $ try (atomically waitRead) >>= \case
+                    Left err -> return (Left (setLoc err))
+                    Right _ -> loop
 #endif
-        setLoc :: IOError -> IOError
-        setLoc err = err {ioe_location = funcName}
-        fdError :: IOError
-        fdError =
-          IOError {ioe_handle = Nothing
-                  ,ioe_type = ResourceVanished
-                  ,ioe_location = funcName
-                  ,ioe_description =
-                     "failed to fetch file descriptor (did the connection time out?)"
-                  ,ioe_errno = Nothing
-                  ,ioe_filename = Nothing}
+    loop =
+      join $
+      withConnection conn $
+      \c ->
+        do void $ PQ.consumeInput c
+           fetch c
+
+    setLoc :: IOError -> IOError
+    setLoc err = err {ioe_location = funcName}
+
+    fdError :: IOError
+    fdError =
+      IOError {ioe_handle = Nothing
+              ,ioe_type = ResourceVanished
+              ,ioe_location = funcName
+              ,ioe_description =
+                 "failed to fetch file descriptor (did the connection time out?)"
+              ,ioe_errno = Nothing
+              ,ioe_filename = Nothing}
 
 -- | Non-blocking variant of 'getNotification'.
 --
