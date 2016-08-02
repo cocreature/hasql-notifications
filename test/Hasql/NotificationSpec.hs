@@ -44,13 +44,7 @@ spec :: Spec
 spec =
   do around withDBConn $
        describe "getNotificationNonBlocking" $
-       do it "should return a notification" $
-            \conn ->
-              do _ <- execute conn "LISTEN channel"
-                 _ <- execute conn "NOTIFY channel"
-                 notification <- getNotNonBlock conn
-                 notification `shouldSatisfy` isJust
-          it "should not return a notification" $
+       do it "should not return a notification" $
             \conn ->
               do _ <- execute conn "LISTEN channel"
                  notification <- getNotNonBlock conn
