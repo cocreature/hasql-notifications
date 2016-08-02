@@ -10,8 +10,6 @@ import           Data.Either
 import           Data.Maybe
 import           Data.Text.Encoding (encodeUtf8)
 import qualified Database.PostgreSQL.LibPQ as PQ
-import           Database.PostgreSQL.Simple hiding (execute)
-import           Database.PostgreSQL.Simple.Internal hiding (exec)
 import           Hasql.Connection
 import           Hasql.Notification
 import           Hasql.Session
@@ -19,7 +17,7 @@ import           Test.Hspec
 
 
 
--- withDBConn :: (Connection -> IO a) -> IO a
+withDBConn :: (Connection -> IO a) -> IO a
 withDBConn f =
   bracket (fmap (\(Right conn) -> conn) $
            acquire (settings "" 0 "postgres" "" "postgres"))
@@ -29,16 +27,8 @@ withDBConn f =
 
 getNotNonBlock = getNotificationNonBlocking' withConn
 
--- withDBConn f =
---   bracket (fmap (\(Right conn) -> conn) $ acquire (settings "" 0 "postgres" "" "postgres"))
---   release
---   f
 withConn = withLibPQConnection
 execute conn t = run (sql t) conn
-
--- withDBConn f = bracket (connectPostgreSQL "user='postgres'") close f
--- withConn = withMVar . connectionHandle
--- execute = execute_
 
 spec :: Spec
 spec =
@@ -95,5 +85,5 @@ exec h sql =
                Nothing -> error "Database.PostgreSQL.Simple.Internal.exec"
                Just fd ->
                  do -- Disabling threadWaitRead causes the bug
-                    threadWaitRead fd
+                    -- threadWaitRead fd
                     PQ.getResult h
