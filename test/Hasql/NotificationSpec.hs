@@ -84,42 +84,16 @@ test lock f c = do putStrLn "filling lock"
 -- send using this function rather than simply combining sendQuery w
 -- ith getResult like hasql does. Otherwise random race conditions
 -- occur in which threadWaitRead deadlocks.
--- exec h sql =
---   do success <- PQ.sendQuery h sql
---      if success
---         then awaitResult h Nothing
---         else error "PQsendQuery failed"
---   where awaitResult h mres =
---           do mfd <- PQ.socket h
---              case mfd of
---                Nothing -> error "Database.PostgreSQL.Simple.Internal.exec"
---                Just fd ->
---                  do threadWaitRead fd
---                     _ <- PQ.consumeInput h  -- FIXME?
---                     getResult h mres
---         getResult h mres =
---           do isBusy <- PQ.isBusy h
---              if isBusy
---                 then awaitResult h mres
---                 else do mres' <- PQ.getResult h
---                         case mres' of
---                           Nothing ->
---                             case mres of
---                               Nothing ->
---                                 error "PQgetResult returned no results"
---                               Just res -> return res
---                           Just res ->
---                             do status <- PQ.resultStatus res
---                                case status of
---                                  PQ.EmptyQuery    -> getResult h mres'
---                                  PQ.CommandOk     -> getResult h mres'
---                                  PQ.TuplesOk      -> getResult h mres'
---                                  PQ.CopyOut       -> return res
---                                  PQ.CopyIn        -> return res
---                                  PQ.BadResponse   -> getResult h mres'
---                                  PQ.NonfatalError -> getResult h mres'
---                                  PQ.FatalError    -> getResult h mres'
-
--- BUG: This doesn’t seem to always change the file descriptor when
--- sending a notification.
-exec h sql = PQ.sendQuery h sql >> PQ.getResult h
+exec h sql =
+  do success <- PQ.sendQuery h sql
+     if success
+        then awaitResult h
+        else error "PQsendQuery failed"
+  where awaitResult h =
+          do mfd <- PQ.socket h
+             case mfd of
+               Nothing -> error "Database.PostgreSQL.Simple.Internal.exec"
+               Just fd ->
+                 do -- Disabling threadWaitRead causes the bug
+                    threadWaitRead fd
+                    PQ.getResult h
