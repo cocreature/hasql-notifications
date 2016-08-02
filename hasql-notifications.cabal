@@ -34,7 +34,6 @@ test-suite hasql-notifications-test
                      , hasql
                      , hasql-notifications
                      , hspec
-                     , postgres-tmp >= 0.1 && < 0.2
                      , postgresql-libpq
                      , postgresql-simple
                      , text >= 1.2 && < 1.3
